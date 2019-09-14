@@ -344,8 +344,6 @@ struct data_file_si // data_file_short_integer
 };
 
 
-
-
 /************************************************
 functions defined in timespec_functions.c
 ************************************************/

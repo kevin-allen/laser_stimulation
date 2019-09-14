@@ -100,7 +100,8 @@ int comedi_interface_init(struct comedi_interface* com)
     }
 
   comedi_interface_build_command(com);
-    
+
+  comedi_interface_print_info(com);
 #ifdef DEBUG_ACQ
   fprintf(stderr,"comedi_interface_init, number_channels: %d\n",com->number_channels);
   fprintf(stderr,"comedi_interface_init, com->buffer_size: %d  com->max_number_samples_in_buffer:%d\n",com->buffer_size,com->max_number_samples_in_buffer);
@@ -1235,7 +1236,7 @@ int comedi_interface_stop_acquisition(struct comedi_interface* com)
       fprintf(stderr,"com->acquisistion_thread_running is already set to 0 in comedi_interface_stop_acquisition\n");
     }
   com->is_acquiring=0;
-  while(com->acquisition_thread_running==1) // wait untill recording thread is over
+  while(com->acquisition_thread_running==1) // wait untill acquisition thread is over
     {
       nanosleep(&com->inter_acquisition_sleep_timespec,&com->req);
     }
