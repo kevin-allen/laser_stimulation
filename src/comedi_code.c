@@ -101,7 +101,7 @@ int comedi_interface_init(struct comedi_interface* com)
 
   comedi_interface_build_command(com);
 
-  comedi_interface_print_info(com);
+  //  comedi_interface_print_info(com);
 #ifdef DEBUG_ACQ
   fprintf(stderr,"comedi_interface_init, number_channels: %d\n",com->number_channels);
   fprintf(stderr,"comedi_interface_init, com->buffer_size: %d  com->max_number_samples_in_buffer:%d\n",com->buffer_size,com->max_number_samples_in_buffer);

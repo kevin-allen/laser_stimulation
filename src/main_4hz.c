@@ -21,6 +21,7 @@ laser_stim_4hz is a simplified laser_stimulation program to specifically targets
 date 14.09.2019
 ************************************************************************/
 #include "main.h"
+#define DEBUG_4HZ
 
 void print_options();
 int main(int argc, char *argv[])
@@ -43,6 +44,12 @@ int main(int argc, char *argv[])
   int with_f_opt=0;
   int with_F_opt=0;
   int with_q_opt=0;
+
+  int with_w_opt=0;
+  int with_X_opt=0;
+  int with_y_opt=0;
+  int with_z_opt=0;
+  
   int with_o_opt=0;
   int with_c_opt=0;
   int with_x_opt=0;
@@ -58,6 +65,13 @@ int main(int argc, char *argv[])
   double minimum_filter_freq=2;
   double maximum_filter_freq=6;
   double stimulation_phase_deviation=30;
+
+  // variables to do the fft
+  int fft_length=16384;
+  int fft_data_length_in_fft=10000;
+  double power_window_size_ms= 500;
+  int power_window_size;
+  int sampling_rate=20000;
   
   char * dat_file_name;
   int channels_in_dat_file=32;
@@ -88,7 +102,13 @@ int main(int argc, char *argv[])
 	  {"minimum_filter_freq", required_argument,0,'f'},
 	  {"maximum_filter_freq", required_argument,0,'F'},
 	  {"stimulation_phase_deviation", required_argument,0,'q'},
-	  	  
+
+	  {"window_fft_total_length", required_argument,0,'w'},
+	  {"window_fft_data_length", required_argument,0,'X'},
+	  {"window_fft_power_ms", required_argument,0,'y'},
+	  {"sampling_rate", required_argument,0,'z'},
+	  
+	  
 	  {"offline", required_argument,0,'o'},
 	  {"channels_in_dat_file", required_argument,0,'c'},
 	  {"offline_channel", required_argument,0,'x'},
@@ -98,7 +118,7 @@ int main(int argc, char *argv[])
 	  {0, 0, 0, 0}
 	};
       int option_index = 0;
-      opt = getopt_long (argc, argv, "hvPH:l:m:M:r:f:F:q:o:c:x:d:a:",
+      opt = getopt_long (argc, argv, "hvPH:l:m:M:r:f:F:q:w:X:y:z:o:c:x:d:a:",
 			 long_options, &option_index);
       
       /* Detect the end of the options. */
@@ -179,6 +199,30 @@ int main(int argc, char *argv[])
 	    stimulation_phase_deviation=atof(optarg);
 	    break;
 	  }	  
+	case 'w':
+	  {
+	    with_w_opt=1;
+	    fft_length=atoi(optarg);
+	    break;
+	  }
+	case 'X':
+	  {
+	    with_X_opt=1;
+	    fft_data_length_in_fft=atoi(optarg);
+	    break;
+	  }
+	case 'y':
+	  {
+	    with_y_opt=1;
+	    power_window_size_ms=atof(optarg);
+	    break;
+	  }
+	case 'z':
+	  {
+	    with_z_opt=1;
+	    sampling_rate=atoi(optarg);
+	    break;
+	  }
 	case  'o':
 	  {
 	    with_o_opt=1;
@@ -270,7 +314,7 @@ int main(int argc, char *argv[])
   struct comedi_interface comedi_inter;
 
   // structure with variables to do the filtering of signal
-  struct fftw_interface_theta fftw_inter;
+  struct fftw_interface_4hz fftw_inter;
 
   // structure with variables to do time keeping
   struct time_keeper tk;
@@ -285,6 +329,7 @@ int main(int argc, char *argv[])
   double current_phase=0;
   double phase_diff;
 
+  power_window_size=(int)(power_window_size_ms*sampling_rate/1000);
   
   // parce the arguments from the command line
   tk.trial_duration_sec=atof(argv[optind]);
@@ -298,7 +343,6 @@ int main(int argc, char *argv[])
   int new_samples_per_read_operation=60; //  3 ms of data
   short int* data_from_file;
   short int* ref_from_file;
-
 
   /*************************************************************
    block to check if the options and arguments make sense
@@ -426,9 +470,429 @@ int main(int argc, char *argv[])
 	  return 1;
 	}
     }
+  
+  if(fft_length<100||fft_length> 2000000)
+    {
+      fprintf(stderr,"%s: fft_length is outside of possible range (256,131072): %d.\n", prog_name,fft_length);
+      fprintf(stderr,"fft_length should be 2 to the power of ... \nYou gave %d\n",fft_length);
+      fprintf(stderr,"try one of the following values\n");
+      for (i = 8; i < 18; i++)
+	{
+	  fprintf(stderr,"%d\n",(int)pow((double)2,(double)i));
+	}	
+      return 1;
+    }
+  
+  if (!(((fft_length | (fft_length - 1)) + 1) / 2 == fft_length))
+    {
+      fprintf(stderr,"fft_length should be 2 to the power of ... \nYou gave %d\n",fft_length);
+      fprintf(stderr,"try one of the following values\n");
+      for (i = 8; i < 18; i++)
+	{
+	  fprintf(stderr,"%d\n",(int)pow((double)2,(double)i));
+	}	
+      return 1; 
+    }
+  
+  if(fft_data_length_in_fft>=fft_length || fft_data_length_in_fft<=10)
+    {
+      fprintf(stderr,"%s: fft_data_length_in_fft should be smaller or equal to %d and larger than 10\n",prog_name,fft_length);
+      return 1;
+    }
+  
+  if(power_window_size<10||power_window_size>fft_data_length_in_fft)
+    {
+      fprintf(stderr,"%s: power_window_size should be larger than 10 and smaller than fft_data_length_in_fft (%d) but was %d\n",prog_name,fft_data_length_in_fft,power_window_size);
+      return 1;
+    }
+  
+  if(sampling_rate<1000 || sampling_rate>50000)
+    {
+      fprintf(stderr,"%s: sampling_rate should be betwene 1000 and 50000 but is %d\n",prog_name,sampling_rate);
+      return 1;
+
+    }
 
   
+  /***********************************************
+      declare the program as a reat time program 
+      the user will need to be root to do this
+  *************************************************/
+  if (with_o_opt==0) // don't do it if you work offline
+    {
+      struct sched_param param;
+      param.sched_priority = MY_PRIORITY;
+      if(sched_setscheduler(0, SCHED_FIFO, &param) == -1) 
+	{
+	  fprintf(stderr,"%s : sched_setscheduler failed\n",prog_name);
+	  fprintf(stderr,"Do you have permission to run real-time applications? You might need to be root or use sudo\n");
+	  return 1;
+	}
+      // Lock memory 
+      if(mlockall(MCL_CURRENT|MCL_FUTURE) == -1) 
+	{
+	  fprintf(stderr,"%s: mlockall failed",prog_name);
+	  return 1;
+	}
+      // Pre-fault our stack 
+      unsigned char dummy[MAX_SAFE_STACK];
+      memset(&dummy, 0, MAX_SAFE_STACK);
+    }
+
+
+
+
+
+  /*********************************************************
+     code to initialize the AD card drivers and our interface
+  **********************************************************/
+  if (with_o_opt==0)
+    { // only done when working online
+      if (comedi_interface_init(&comedi_inter)==-1)
+	{
+	  fprintf(stderr,"%s could not initialize comedi_interface\n",prog_name);
+	  return 1;
+	}
+
+      if(comedi_interface_set_sampling_rate(&comedi_inter,sampling_rate)==-1)
+	{
+	  fprintf(stderr,"%s could not set the sampling rate of comedi_interface\n",prog_name);
+	  return 1;
+	}
+      // set the comedi_interface so it tries to get data every 2 ms
+      comedi_interface_set_inter_acquisition_sleeping_time(&comedi_inter,COMEDI_INTERFACE_ACQUISITION_SLEEP_TIME_MS);
+      // set the first comedi device so that is sample NUMBER_SAMPLED_CHANNEL_DEVICE_0 times channel BRAIN_CHANNEL_1
+      // useful during stimulation based on brain activity
+      // buffer on the card will fill up more quickly and we get access to it more frequently
+      for(i=0;i<NUMBER_SAMPLED_CHANNEL_DEVICE_0;i++)
+	{
+	  channel_list[i]=BRAIN_CHANNEL_1;
+	}
+      comedi_interface_set_sampled_channels(&comedi_inter,0, NUMBER_SAMPLED_CHANNEL_DEVICE_0,channel_list);
+      
+      // make sure there is a valid analog output subdevice on the acquisition card
+      if(comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output==-1)
+	{
+	  fprintf(stderr,"%s: there is no valid analog output subdevice on device %d\n",prog_name,device_index_for_stimulation);
+	  return 1;
+	}
+      // make sure we have at least 2 channels for analog output: intensity and pulse of laser
+      if (comedi_inter.dev[device_index_for_stimulation].number_channels_analog_output<2)
+	{
+	  fprintf(stderr, "%s: subdevice_analog_output has less than 2 channels\n",prog_name);
+	  return 1;
+	}
+      // check if laser intensity is outside of range for the analog output subdevice
+      if (comedi_inter.dev[device_index_for_stimulation].voltage_max_output<laser_intensity_volt)
+	{
+	  fprintf(stderr, "%s: subdevice_analog_output max voltage is smaller than laser intensity\n",prog_name);
+	  return 1;
+	}
+      // check if laser pulse is outside of range for the analog output subdevice
+      if (comedi_inter.dev[device_index_for_stimulation].voltage_max_output<ttl_amplitude_volt)
+	{
+	  fprintf(stderr, "%s: subdevice_analog_output max voltage is smaller than ttl_amplitude_volt (%lf)\n",prog_name,ttl_amplitude_volt);
+	  return 1;
+	}
+      if(ttl_amplitude_volt<0)
+	{
+	  fprintf(stderr, "%s: ttl_amplitude_volt should be at least 0 Volt but is %lf\n",prog_name,ttl_amplitude_volt);
+	  return 1;
+	}
+      
+      // get the value for the laser intensity and pulse
+      comedi_baseline=comedi_from_phys(baseline_volt,
+				       comedi_inter.dev[device_index_for_stimulation].range_output_array[comedi_inter.dev[device_index_for_stimulation].range_output],
+				       comedi_inter.dev[device_index_for_stimulation].maxdata_output);
+      comedi_intensity=comedi_from_phys(laser_intensity_volt,
+					comedi_inter.dev[device_index_for_stimulation].range_output_array[comedi_inter.dev[device_index_for_stimulation].range_output],
+					comedi_inter.dev[device_index_for_stimulation].maxdata_output);
+      comedi_pulse=comedi_from_phys(ttl_amplitude_volt,
+				    comedi_inter.dev[device_index_for_stimulation].range_output_array[comedi_inter.dev[device_index_for_stimulation].range_output],
+				    comedi_inter.dev[device_index_for_stimulation].maxdata_output);
+      
+      // set the intensity channel
+      comedi_data_write(comedi_inter.dev[device_index_for_stimulation].comedi_dev,
+			comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output, 
+			CHANNEL_FOR_LASER_INTENSITY,
+			comedi_inter.dev[device_index_for_stimulation].range_output,
+			comedi_inter.dev[device_index_for_stimulation].aref,
+			comedi_intensity);
+
+      // set the pulse channel to baseline
+      comedi_data_write(comedi_inter.dev[device_index_for_stimulation].comedi_dev,
+			comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output,
+			CHANNEL_FOR_PULSE,
+			comedi_inter.dev[device_index_for_stimulation].range_output,
+			comedi_inter.dev[device_index_for_stimulation].aref,
+			comedi_baseline);
+#ifdef DEBUG_4HZ
+      comedi_interface_print_info(&comedi_inter);
+#endif
+
+    }
   
+  /*********************************************
+     code to initialize the dat file if needed
+  *********************************************/
+  if(with_o_opt==1)
+    {
+      if((init_data_file_si(&data_file,dat_file_name,channels_in_dat_file))!=0)
+	{
+	  fprintf(stderr, "%s: problem in initialisation of dat file\n",prog_name);
+	  return 1;
+	}
+    }
+
+
+
+  
+  /*************************************************
+   section to do 4Hz stimulation based on power
+  *************************************************/
+  if(with_P_opt==1)
+    {
+      if(fftw_interface_4hz_init(&fftw_inter,
+				 minimum_filter_freq,
+				 maximum_filter_freq,
+				 fft_length,
+				 fft_data_length_in_fft,
+				 power_window_size,
+				 sampling_rate)==-1)
+	{
+	  fprintf(stderr,"%s could not initialize fftw_interface_4hz\n",prog_name);
+	  return 1;
+	}
+#ifdef DEBUG_4HZ
+      fftw_interface_4hz_print(&fftw_inter);
+#endif
+
+      if(with_o_opt==1)
+	{ // if get data from dat file, allocate memory to store short integer from dat file
+	  if((data_from_file=(short *) malloc(sizeof(short)*fftw_inter.real_data_to_fft_size))==NULL)
+	    {
+	      fprintf(stderr,"%s: problem allocating memory for data_from_file\n",prog_name);
+	      return 1;
+	    }
+	}
+
+      
+      tk.duration_refractory_period=set_timespec_from_ms(refractory_ms);
+      
+      // start the acquisition thread, which will run in the background until comedi_inter.is_acquiring is set to 0
+#ifdef DEBUG_4HZ
+      fprintf(stderr,"starting acquisition\n");
+#endif
+
+      
+      if(comedi_interface_start_acquisition(&comedi_inter)==-1)
+	{
+	  fprintf(stderr,"%s could not start comedi acquisition\n",prog_name);
+	  return 1;
+	}
+ #ifdef DEBUG_4HZ
+      // to check the intervals before getting new data.
+      clock_gettime(CLOCK_REALTIME, &tk.time_previous_new_data);
+      long int counter=0;
+#endif
+
+      // get time at beginning of trial
+      clock_gettime(CLOCK_REALTIME, &tk.time_beginning_trial);
+      clock_gettime(CLOCK_REALTIME, &tk.time_now);
+      clock_gettime(CLOCK_REALTIME, &tk.time_last_stimulation);
+      tk.elapsed_beginning_trial=diff(&tk.time_beginning_trial,&tk.time_now);
+      
+#ifdef DEBUG_4HZ
+      fprintf(stderr,"start trial loop\n");
+#endif
+      while(tk.elapsed_beginning_trial.tv_sec < tk.trial_duration_sec) // loop until the trial is over
+	{
+
+#ifdef DEBUG_4HZ
+	  //	  fprintf(stderr,"time elapsed: %ld.%ld sec\n",tk.elapsed_beginning_trial.tv_sec,tk.elapsed_beginning_trial.tv_nsec);
+#endif
+
+	  
+	  // check if acquisition loop is still running, could have stop because of buffer overflow
+	  if(comedi_inter.is_acquiring==0)
+	    {
+	      fprintf(stderr,"comedi acquisition was stopped, theta stimulation not possible\n");
+	      return 1;
+	    }
+	  
+	  if (with_o_opt==0) // get data from comedi acquisition device
+	    {
+	      // if no new data is available or not enough data to do a fftw
+	      while((comedi_inter.number_samples_read<=last_sample_no) || (comedi_inter.number_samples_read < fftw_inter.real_data_to_fft_size) )
+		{
+		  // sleep a bit and check for new data
+		  nanosleep(&tk.duration_sleep_when_no_new_data,&tk.req);
+		}
+	      // copy the last data from the comedi_interface into the fftw_inter.signal_data
+	      last_sample_no=comedi_interface_get_last_data_one_channel(&comedi_inter,BRAIN_CHANNEL_1,fftw_inter.real_data_to_fft_size,fftw_inter.signal_data,&tk.time_last_acquired_data);
+	      if(last_sample_no==-1)
+		{
+		  fprintf(stderr,"error returned by comedi_interface_get_data_one_channe()\n");
+		  return 1;
+		}
+#ifdef DEBUG_4HZ
+	      clock_gettime(CLOCK_REALTIME, &tk.time_current_new_data);
+	      tk.duration_previous_current_new_data=diff(&tk.time_previous_new_data,&tk.time_current_new_data);
+	      //  fprintf(stderr,"%ld until sample %ld, last_sample_no: %ld with interval %lf(us)\n",counter++,comedi_inter.number_samples_read, last_sample_no, tk.duration_previous_current_new_data.tv_nsec/1000.0);
+	      tk.time_previous_new_data=tk.time_current_new_data;
+#endif
+	      
+	    }
+	  else // get data from a dat file
+	    {
+	      if(last_sample_no==0)
+		{
+		  // fill the buffer with the beginning of the file
+		  if((data_file_si_get_data_one_channel(&data_file, offline_channel, data_from_file,0,fftw_inter.real_data_to_fft_size))!=0)
+		    {
+		      fprintf(stderr,"%s, problem with data_file_si_get_data_one_channel, first index: %d, last index: %d\n",prog_name,0,fftw_inter.real_data_to_fft_size);
+		      return 1;
+		    }
+		  last_sample_no=fftw_inter.real_data_to_fft_size;
+		}
+	      else
+		{
+		  // get data further on in the dat file
+		  if((data_file_si_get_data_one_channel(&data_file, offline_channel, data_from_file,last_sample_no+new_samples_per_read_operation-fftw_inter.real_data_to_fft_size,last_sample_no+new_samples_per_read_operation))!=0)
+		    {
+		      fprintf(stderr,"%s, problem with data_file_si_get_data_one_channel, first index: %ld, last index: %ld\n",prog_name,last_sample_no+new_samples_per_read_operation-fftw_inter.real_data_to_fft_size,last_sample_no+new_samples_per_read_operation);
+		      return 1;
+		    }
+		  last_sample_no= last_sample_no+new_samples_per_read_operation;
+		}
+	      // copy the short int array to double array
+	      for (i=0; i < fftw_inter.real_data_to_fft_size;i++)
+		{
+		  fftw_inter.signal_data[i]=data_from_file[i];
+		}
+	    }
+	  
+	  if(last_sample_no>=fftw_inter.real_data_to_fft_size)
+	    {
+	      
+	      // filter the raw signal
+	      fftw_interface_4hz_apply_filter(&fftw_inter);
+	      	     
+             // get the theta/delta ratio
+	      /*
+	      theta_delta_ratio=fftw_interface_theta_delta_ratio(&fftw_inter);
+#ifdef DEBUG_THETA
+	      fprintf(stderr,"theta_delta_ratio: %lf\n",theta_delta_ratio);
+#endif
+	      if (theta_delta_ratio>THETA_DELTA_RATIO)
+		{
+		  clock_gettime(CLOCK_REALTIME, &tk.time_now);
+		  tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
+		  // get the phase
+		  current_phase=fftw_interface_theta_get_phase(&fftw_inter, &tk.elapsed_last_acquired_data,theta_frequency); 
+		  // phase difference between wanted and what it is now, from -180 to 180
+		  phase_diff=phase_difference(current_phase,stimulation_theta_phase);
+#ifdef DEBUG_THETA
+		  fprintf(stderr,"stimulation_theta_phase: %lf current_phase: %lf phase_difference: %lf\n",stimulation_theta_phase,current_phase,phase_difference);
+#endif
+		  // if the absolute phase difference is smaller than the max_phase_difference
+		  if(sqrt(phase_diff*phase_diff)<max_phase_diff)
+		    { 
+		      // if we are just before the stimulation phase, we nanosleep to be bang on the correct phase
+		      if(phase_diff<0)
+			{
+			  tk.duration_sleep_to_right_phase=set_timespec_from_ms((0-phase_diff)*theta_degree_duration_ms);
+			  nanosleep(&tk.duration_sleep_to_right_phase,&tk.req);
+			}
+		      clock_gettime(CLOCK_REALTIME,&tk.time_now);
+		      tk.elapsed_last_stimulation=diff(&tk.time_last_stimulation,&tk.time_now);
+		      
+		      // if the laser refractory period is over
+		      if(tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec || 
+			 tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec )
+			{
+			  // stimulation time!!
+			  clock_gettime(CLOCK_REALTIME,&tk.time_last_stimulation); 
+						  
+			  // start the pulse
+			  comedi_data_write(comedi_inter.dev[device_index_for_stimulation].comedi_dev,
+					    comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output,
+					    CHANNEL_FOR_PULSE,
+					    0,
+					    comedi_inter.dev[device_index_for_stimulation].aref,
+					    comedi_pulse);
+			  // wait
+			  nanosleep(&tk.duration_pulse,&tk.req);
+			  
+			  // end of the pulse
+			  comedi_data_write(comedi_inter.dev[device_index_for_stimulation].comedi_dev,
+					    comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output,
+					    CHANNEL_FOR_PULSE,
+					    0,
+					    comedi_inter.dev[device_index_for_stimulation].aref,
+					    comedi_baseline);
+#ifdef DEBUG_THETA
+			  fprintf(stderr,"interval from last stimulation: %ld (us)\n",tk.elapsed_last_stimulation.tv_nsec/1000);
+#endif
+			}
+		    }
+		}
+	  
+	      clock_gettime(CLOCK_REALTIME, &tk.time_now);
+	      tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
+	      
+	      // will stop the trial
+	      //	      tk.elapsed_beginning_trial.tv_sec = tk.trial_duration_sec;
+	      */
+	      }
+	  
+	  clock_gettime(CLOCK_REALTIME, &tk.time_now);
+	  tk.elapsed_beginning_trial=diff(&tk.time_beginning_trial,&tk.time_now);
+	}
+      
+      // this will stop the acquisition thread
+#ifdef DEBUG_4HZ
+      fprintf(stderr,"stop acquisition thread\n");
+#endif
+       if(comedi_interface_stop_acquisition(&comedi_inter)==-1)
+	{
+	  fprintf(stderr,"%s could not stop comedi acquisition\n",prog_name);
+	  return 1;
+	}
+
+       // free the memory used by fftw_inter    
+      fftw_interface_4hz_free(&fftw_inter);
+    }
+     
+
+
+
+
+
+
+  
+
+
+
+
+  /******************************
+       code to free resources 
+  ******************************/
+  if (with_o_opt==0)
+    {
+      // free the memory used by comedi_inter
+      comedi_interface_free(&comedi_inter);
+    }
+  // free the memory for dat file data, if running with offline data
+  if(with_o_opt==1)
+    {
+      if((clean_data_file_si(&data_file))!=0)
+	{
+	  fprintf(stderr, "%s: problem with clean_data_file_si\n",prog_name);
+	  return 1;
+	}
+      free(data_from_file);
+    }
   return 0;
 } 
 
@@ -450,6 +914,14 @@ void print_options()
   printf("--maximum_filter_freq <freq_hz> or -F\t\t: highest frequency of the band pass filter\n");
   printf("--stimulation_phase_deviation <phase_deg> or -q\t: largest difference between stimulation phase and current phase that will trigger a stimulation\n");
 
+
+  printf("--window_fft_total_length <samples> or -w\t: length of segment to fft (integer), faster with pow(2,x)\n");
+  printf("--window_fft_data_length <samples> or -X\t: number of data samples in fft (integer), the rest is padded with 0 for better phase cal\n");
+  printf("--window_fft_power_ms <ms> or -y\t\t: lenght of segment in ms to calculate the power\n");
+  printf("--sampling_rate <samples per seconds> or -z\t: sampling rate of the data\n");
+
+
+  
   printf("--offline <dat_file_name> or -o\t\t\t: use a .dat file as input data. You also need option -c, together with either -s or -t, to work with -o\n");
   printf("--channels_in_dat_file <number> or -c\t\t: give the number of channels in the dat file. Use only when working offline from a dat file (-o or --offline)\n");
   printf("--offline_channel <number> or -x\t\t: give the channel on which detection is done when working offline from a dat file (-o)\n");

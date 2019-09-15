@@ -20,6 +20,152 @@ date 15.02.2010
 ************************************************************************/
 
 #include "main.h"
+int fftw_interface_4hz_init(struct fftw_interface_4hz* fftw_int,
+			    double minimum_filter_freq,
+			    double maximum_filter_freq,
+			    int fft_length,
+			    int fft_data_length_in_fft,
+			    int power_window_size,
+			    int sampling_rate)
+{
+  int i;
+  fftw_int->sampling_rate=sampling_rate;
+  fftw_int->fft_signal_data_size= fft_length; // should be a power of 2
+  fftw_int->power_signal_length=power_window_size; // last data on which to calculate power,
+  fftw_int->real_data_to_fft_size=fft_data_length_in_fft;
+  if(fftw_int->fft_signal_data_size<fftw_int->real_data_to_fft_size)
+    {
+      fprintf(stderr,"fftw_int->fft_signal_data_size<fftw_int->real_data_to_fft_size in fftw_interface_theta_init\n");
+      return -1;
+    }
+  
+  fftw_int->m=fftw_int->fft_signal_data_size/2+1; // length of the fft complex array (diff than for numerical reciepe)
+  fftw_int->power_signal_length=fftw_int->fft_signal_data_size/2; // portion of the signal on which the power is calculated
+  // start from most recent data and go back this number of samples
+  
+  
+  // variables for theta detection
+  fftw_int->min_frequency=minimum_filter_freq; 
+  fftw_int->max_frequency=maximum_filter_freq;
+
+  
+  // variables to calculate the power
+  fftw_int->signal_sum_square=0;
+  fftw_int->signal_mean_square=0;
+  fftw_int->signal_root_mean_square=0;
+ 
+  // allocate memory
+  if((fftw_int->signal_data=malloc(sizeof(double)*fftw_int->fft_signal_data_size))==NULL)
+    {
+      fprintf(stderr,"problem allocating memory for fftw_int->signal_data\n");
+      return -1;
+    }
+  for(i=0;i<fftw_int->fft_signal_data_size;i++)
+    { // initialise to 0
+      fftw_int->signal_data[i]=0;
+    }
+  if((fftw_int->filter_function=malloc(sizeof(double)*fftw_int->m))==NULL)
+    {
+      fprintf(stderr,"problem allocating memory for fftw_int->filter_function\n");
+      return -1;
+    }
+  if((fftw_int->filtered_signal=(double*) fftw_malloc(sizeof(double)*fftw_int->fft_signal_data_size))==NULL)
+    {
+      fprintf(stderr,"problem allocating memory for fftw_int->filtered_signal\n");
+      return -1;
+    }
+  if((fftw_int->out=(fftw_complex*) fftw_malloc(sizeof(fftw_complex) * fftw_int->fft_signal_data_size))==NULL)
+    {
+      fprintf(stderr,"problem allocating memory for fftw_int->out\n");
+      return -1;
+    }
+  
+  // the output complex of fftw has n/2+1 size , real is in out_theta[i][0] and imaginary is in out_theta [i][1]
+  if((fftw_int->fft_plan_forward=fftw_plan_dft_r2c_1d(fftw_int->fft_signal_data_size,fftw_int->filtered_signal,fftw_int->out,FFTW_MEASURE))==NULL)
+    {
+      fprintf(stderr,"unable to create a plan for fftw_int->fft_plan_forward\n");
+      return -1;
+    }
+  if((fftw_int->fft_plan_backward=fftw_plan_dft_c2r_1d(fftw_int->fft_signal_data_size, fftw_int->out, fftw_int->filtered_signal,FFTW_MEASURE))==NULL)
+    {
+      fprintf(stderr,"unable to create a plan for fftw_int->fft_plan_backward\n");
+      return -1;
+    }
+
+  // make the butterworth filter for theta
+  make_butterworth_filter(fftw_int->sampling_rate, // max freq is sr/2
+					 fftw_int->m, // m
+					 fftw_int->filter_function, // size m
+					 fftw_int->min_frequency, // lower cut-off frequency
+					 fftw_int->max_frequency); // higher cut-off frequency
+  return 0;
+}
+int fftw_interface_4hz_free(struct fftw_interface_4hz* fftw_int)
+{
+  free(fftw_int->signal_data);
+  free(fftw_int->filter_function);
+  fftw_free(fftw_int->filtered_signal); 
+  fftw_free(fftw_int->out);
+  fftw_destroy_plan(fftw_int->fft_plan_forward);
+  fftw_destroy_plan(fftw_int->fft_plan_backward);
+  return 0;
+}
+
+int fftw_interface_4hz_print(struct fftw_interface_4hz* fftw_int)
+{
+  printf("**** information fftw_interface_4hz ****\n");
+  printf("sampling_rate: %d\n",fftw_int->sampling_rate);
+  printf("fft_signal_data_size: %d\n",fftw_int->fft_signal_data_size);
+  printf("power_signal_length: %d\n",fftw_int->power_signal_length);
+  printf("min_frequency: %lf Hz\n",fftw_int->min_frequency);
+  printf("max_frequency: %lf Hz\n",fftw_int->max_frequency);
+  return 0;
+}
+
+int fftw_interface_4hz_apply_filter(struct fftw_interface_4hz* fftw_int)
+{
+  int i;
+  double sum=0;
+  double mean;
+  
+  // set the mean of the signal to 0
+  for (i=0;i<fftw_int->real_data_to_fft_size;i++)
+    {
+      sum+=fftw_int->signal_data[i];
+    }
+  mean=sum/fftw_int->real_data_to_fft_size;
+  for (i=0;i<fftw_int->real_data_to_fft_size;i++)
+    {
+      fftw_int->signal_data[i]=fftw_int->signal_data[i]-mean;
+    }
+
+  // copy the signal data into the fitered signal array
+  for (i = 0; i < fftw_int->fft_signal_data_size; i++)
+    {
+      fftw_int->filtered_signal[i] = fftw_int->signal_data[i];
+    }
+
+  // do the fft forward, will give us an array of complex values  
+  fftw_execute(fftw_int->fft_plan_forward);
+
+ 
+  // do the filtering
+  for(i=0; i < fftw_int->m;i++)
+    {
+      fftw_int->out[i][0]=fftw_int->out[i][0]*fftw_int->filter_function[i];
+      fftw_int->out[i][1]=fftw_int->out[i][1]*fftw_int->filter_function[i];
+    }
+  // reverse the fft
+  fftw_execute(fftw_int->fft_plan_backward);
+  
+  // rescale the results by the factor of fft_signal_data_size
+  for (i=0;i <fftw_int->fft_signal_data_size;i++)
+    {
+      fftw_int->filtered_signal[i]=fftw_int->filtered_signal[i]/fftw_int->fft_signal_data_size;
+    }
+  return 0;  
+}
+
 
 int fftw_interface_theta_init(struct fftw_interface_theta* fftw_int)
 {
@@ -266,6 +412,61 @@ double fftw_interface_theta_get_phase(struct fftw_interface_theta* fftw_int, str
     }
   return phase;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 int make_butterworth_filter(int sampling_rate, // max freq is sr/2

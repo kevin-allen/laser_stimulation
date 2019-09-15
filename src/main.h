@@ -51,11 +51,12 @@ date 15.02.2010
 // #define DEBUG_ACQ
 
 
+
 //#define DEBUG_FFTW_INTER
 
 // defines for theta detection
 #define FFT_SIGNAL_DATA_SIZE_THETA 16384 // length of data segment to FFTW
-#define REAL_DATA_IN_SEGMENT_TO_FFT_THETA 10000 // half a second of data in FFTW, the rest is padding of 0 to avoid phase shift at the end due to beginning of signal
+#define REAL_DATA_IN_SEGMENT_TO_FFT_THETA 10000 // half a second of data in FFTW, rest 0 padding to avoid phase shift at the end due to beginning of signal
 #define DATA_IN_SEGMENT_TO_POWER_THETA 10000 // half of second of data to calculate the theta/delta ratio
 #define THETA_DELTA_RATIO  1.75
 #define STIMULATION_REFRACTORY_PERIOD_THETA_MS 80
@@ -284,6 +285,44 @@ struct fftw_interface_swr
 };
 
 
+
+
+/********************************************************
+structure to hold the variables to do the theta analysis
+********************************************************/
+struct fftw_interface_4hz
+{
+  int sampling_rate;
+  int real_data_to_fft_size; // is smaller than fft_signal_data_size, rest will be padded with zero 
+  int fft_signal_data_size; // should be pow of 2
+  double* signal_data; // array of fft_signal_data_size size
+  int m; // length of the fft complex array (diff than for numerical reciepe)
+  int power_signal_length; // portion of the signal on which the power is calculated
+                                         // start from most recent data and go back this number of samples
+  // limits for the different filters
+  double min_frequency; 
+  double max_frequency;
+  // theta_delta_ration to know if this is a theta epochs
+  double signal_sum_square;
+  double signal_mean_square;
+  double signal_root_mean_square;
+  // filter function to do the filtering of the signal
+  double* filter_function; // kernel to do the filtering after the fft
+  fftw_complex *out; // complex array return by fft forward
+  double* filtered_signal; // will go in and out of the fft
+  fftw_plan fft_plan_forward; // plan to do fft forward
+  fftw_plan fft_plan_backward; // plan to do fft forward
+};
+
+
+
+
+
+
+
+
+
+
 /********************************************************
 structure to hold the variables to do the time keeping
 ********************************************************/
@@ -395,6 +434,18 @@ int fftw_interface_theta_free(struct fftw_interface_theta* fftw_int);
 int fftw_interface_theta_apply_filter_theta_delta(struct fftw_interface_theta* fftw_int);
 double fftw_interface_theta_delta_ratio(struct fftw_interface_theta* fftw_int);
 double fftw_interface_theta_get_phase(struct fftw_interface_theta* fftw_int, struct timespec* elapsed_since_acquisition, double frequency);
+
+int fftw_interface_4hz_init(struct fftw_interface_4hz* fftw_int,double minimum_filter_freq,double maximum_filter_freq,
+			    int fft_length,int fft_data_length_in_fft,int power_window_size,int sampling_rate);
+
+int fftw_interface_4hz_free(struct fftw_interface_4hz* fftw_int);
+int fftw_interface_4hz_print(struct fftw_interface_4hz* fftw_int);
+int fftw_interface_4hz_apply_filter(struct fftw_interface_4hz* fftw_int);
+//double fftw_interface_4hz_power(struct fftw_interface_theta* fftw_int);
+//double fftw_interface_4hz_get_phase(struct fftw_interface_theta* fftw_int, struct timespec* elapsed_since_acquisition, double frequency);
+
+
+
 
 
 int fftw_interface_swr_init(struct fftw_interface_swr* fftw_int); // should have parameters to allow signal of different length to be treated
