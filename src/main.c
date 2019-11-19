@@ -824,8 +824,9 @@ int main(int argc, char *argv[])
 		      tk.elapsed_last_stimulation=diff(&tk.time_last_stimulation,&tk.time_now);
 		      
 		      // if the laser refractory period is over
-		      if(tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec || 
-			 tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec )
+		      if((tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec) ||
+			(tk.elapsed_last_stimulation.tv_sec==tk.duration_refractory_period.tv_sec &&
+			 tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec))
 			{
 			  // stimulation time!!
 			  clock_gettime(CLOCK_REALTIME,&tk.time_last_stimulation); 
@@ -1032,8 +1033,9 @@ int main(int argc, char *argv[])
 	      tk.elapsed_last_stimulation=diff(&tk.time_last_stimulation,&tk.time_now);
 
 	      if((swr_power>swr_power_threshold && swr_convolution_peak > swr_convolution_peak_threshold) && // if power is large enough and refractory over
-		 (tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec || tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec))
-		{
+		 ((tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec) ||
+			(tk.elapsed_last_stimulation.tv_sec=tk.duration_refractory_period.tv_sec &&
+			 tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec))
 #ifdef DEBUG_SWR
 		  printf("%ld\n",last_sample_no);
 		  for(i=0;i < fftw_inter_swr.real_data_to_fft_size;i++)
