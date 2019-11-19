@@ -441,11 +441,8 @@ int fftw_interface_4hz_init(struct fftw_interface_4hz* fftw_int,double minimum_f
 int fftw_interface_4hz_free(struct fftw_interface_4hz* fftw_int);
 int fftw_interface_4hz_print(struct fftw_interface_4hz* fftw_int);
 int fftw_interface_4hz_apply_filter(struct fftw_interface_4hz* fftw_int);
-//double fftw_interface_4hz_power(struct fftw_interface_theta* fftw_int);
-//double fftw_interface_4hz_get_phase(struct fftw_interface_theta* fftw_int, struct timespec* elapsed_since_acquisition, double frequency);
-
-
-
+double fftw_interface_4hz_power(struct fftw_interface_4hz* fftw_int);
+double fftw_interface_4hz_get_phase(struct fftw_interface_4hz* fftw_int, struct timespec* elapsed_since_acquisition, double frequency);
 
 
 int fftw_interface_swr_init(struct fftw_interface_swr* fftw_int); // should have parameters to allow signal of different length to be treated

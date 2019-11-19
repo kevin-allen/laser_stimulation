@@ -21,7 +21,7 @@ laser_stim_4hz is a simplified laser_stimulation program to specifically targets
 date 14.09.2019
 ************************************************************************/
 #include "main.h"
-#define DEBUG_4HZ
+//#define DEBUG_4HZ
 
 void print_options();
 int main(int argc, char *argv[])
@@ -305,10 +305,9 @@ int main(int argc, char *argv[])
   lsampl_t comedi_baseline =0;
   lsampl_t comedi_pulse=0;
 
-  //  double theta_frequency=(MIN_FREQUENCY_THETA+MAX_FREQUENCY_THETA)/2;
   //double theta_degree_duration_ms=(1000/theta_frequency)/360;
-  //double theta_delta_ratio;
-
+  double power_4hz;
+  double frequency_for_phase=(minimum_filter_freq+maximum_filter_freq)/2; // use mid point of band pass filter
 
   // structure with variables about the comedi device, see main.h for details
   struct comedi_interface comedi_inter;
@@ -343,6 +342,7 @@ int main(int argc, char *argv[])
   int new_samples_per_read_operation=60; //  3 ms of data
   short int* data_from_file;
   short int* ref_from_file;
+  long int trial_iteration=0;
 
   /*************************************************************
    block to check if the options and arguments make sense
@@ -643,6 +643,7 @@ int main(int argc, char *argv[])
 	  return 1;
 	}
     }
+  
 
 
 
@@ -666,7 +667,7 @@ int main(int argc, char *argv[])
 #ifdef DEBUG_4HZ
       fftw_interface_4hz_print(&fftw_inter);
 #endif
-
+      
       if(with_o_opt==1)
 	{ // if get data from dat file, allocate memory to store short integer from dat file
 	  if((data_from_file=(short *) malloc(sizeof(short)*fftw_inter.real_data_to_fft_size))==NULL)
@@ -675,7 +676,6 @@ int main(int argc, char *argv[])
 	      return 1;
 	    }
 	}
-
       
       tk.duration_refractory_period=set_timespec_from_ms(refractory_ms);
       
@@ -683,19 +683,18 @@ int main(int argc, char *argv[])
 #ifdef DEBUG_4HZ
       fprintf(stderr,"starting acquisition\n");
 #endif
-
-      
-      if(comedi_interface_start_acquisition(&comedi_inter)==-1)
-	{
-	  fprintf(stderr,"%s could not start comedi acquisition\n",prog_name);
-	  return 1;
-	}
- #ifdef DEBUG_4HZ
+      if(with_o_opt==0)
+	if(comedi_interface_start_acquisition(&comedi_inter)==-1)
+	  {
+	    fprintf(stderr,"%s could not start comedi acquisition\n",prog_name);
+	    return 1;
+	  }
+#ifdef DEBUG_4HZ
       // to check the intervals before getting new data.
       clock_gettime(CLOCK_REALTIME, &tk.time_previous_new_data);
       long int counter=0;
 #endif
-
+      
       // get time at beginning of trial
       clock_gettime(CLOCK_REALTIME, &tk.time_beginning_trial);
       clock_gettime(CLOCK_REALTIME, &tk.time_now);
@@ -711,17 +710,20 @@ int main(int argc, char *argv[])
 #ifdef DEBUG_4HZ
 	  //	  fprintf(stderr,"time elapsed: %ld.%ld sec\n",tk.elapsed_beginning_trial.tv_sec,tk.elapsed_beginning_trial.tv_nsec);
 #endif
-
 	  
-	  // check if acquisition loop is still running, could have stop because of buffer overflow
-	  if(comedi_inter.is_acquiring==0)
-	    {
-	      fprintf(stderr,"comedi acquisition was stopped, theta stimulation not possible\n");
-	      return 1;
-	    }
-	  
+ 
 	  if (with_o_opt==0) // get data from comedi acquisition device
 	    {
+	      /**************************************************
+              get data from the comedi device
+	      *************************************************/
+	      // check if acquisition loop is still running, could have stop because of buffer overflow
+	      if(comedi_inter.is_acquiring==0)
+		{
+		  fprintf(stderr,"comedi acquisition was stopped, theta stimulation not possible\n");
+		  return 1;
+		}
+
 	      // if no new data is available or not enough data to do a fftw
 	      while((comedi_inter.number_samples_read<=last_sample_no) || (comedi_inter.number_samples_read < fftw_inter.real_data_to_fft_size) )
 		{
@@ -741,10 +743,13 @@ int main(int argc, char *argv[])
 	      //  fprintf(stderr,"%ld until sample %ld, last_sample_no: %ld with interval %lf(us)\n",counter++,comedi_inter.number_samples_read, last_sample_no, tk.duration_previous_current_new_data.tv_nsec/1000.0);
 	      tk.time_previous_new_data=tk.time_current_new_data;
 #endif
-	      
 	    }
 	  else // get data from a dat file
 	    {
+	      clock_gettime(CLOCK_REALTIME,&tk.time_last_acquired_data);
+	    /**************************************************
+              get data from file
+	    *************************************************/
 	      if(last_sample_no==0)
 		{
 		  // fill the buffer with the beginning of the file
@@ -770,20 +775,45 @@ int main(int argc, char *argv[])
 		{
 		  fftw_inter.signal_data[i]=data_from_file[i];
 		}
+	      
 	    }
-	  
+
+	  /**************************************************
+            data are in memory, time to process the signal
+	   *************************************************/
+	  // 	  for (i=0; i < fftw_inter.real_data_to_fft_size;i++)
 	  if(last_sample_no>=fftw_inter.real_data_to_fft_size)
 	    {
 	      
 	      // filter the raw signal
 	      fftw_interface_4hz_apply_filter(&fftw_inter);
-	      	     
-             // get the theta/delta ratio
-	      /*
-	      theta_delta_ratio=fftw_interface_theta_delta_ratio(&fftw_inter);
-#ifdef DEBUG_THETA
-	      fprintf(stderr,"theta_delta_ratio: %lf\n",theta_delta_ratio);
+
+	      
+             // get the power of signal
+	      power_4hz=fftw_interface_4hz_power(&fftw_inter);
+
+
+             // get the phase of the signal
+	      clock_gettime(CLOCK_REALTIME, &tk.time_now);
+	      tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
+	      // get phase of filtered signal
+
+	      current_phase=fftw_interface_4hz_get_phase(&fftw_inter, &tk.elapsed_last_acquired_data,frequency_for_phase); 
+	      
+	      // phase difference between wanted and what it is now, from -180 to 180
+	      phase_diff=phase_difference(current_phase,stimulation_phase);
+	      
+	      fprintf(stderr,"iter: %ld, phase: %lf \n",trial_iteration,current_phase);	      
+	      for (i=0; i < fftw_inter.real_data_to_fft_size;i++)
+		{
+         	  printf("%ld %ld %lf %lf\n",trial_iteration,last_sample_no-fftw_inter.real_data_to_fft_size+i,fftw_inter.signal_data[i],fftw_inter.filtered_signal[i]);
+	        }
+	      
+	      
+#ifdef DEBUG_4HZ
+	      printf("power at index %ld: %lf\n",last_sample_no,power_4hz);
 #endif
+	      /*
 	      if (theta_delta_ratio>THETA_DELTA_RATIO)
 		{
 		  clock_gettime(CLOCK_REALTIME, &tk.time_now);
@@ -848,18 +878,21 @@ int main(int argc, char *argv[])
 	  
 	  clock_gettime(CLOCK_REALTIME, &tk.time_now);
 	  tk.elapsed_beginning_trial=diff(&tk.time_beginning_trial,&tk.time_now);
+	  trial_iteration+=1;
 	}
       
       // this will stop the acquisition thread
-#ifdef DEBUG_4HZ
-      fprintf(stderr,"stop acquisition thread\n");
-#endif
-       if(comedi_interface_stop_acquisition(&comedi_inter)==-1)
+      if(with_o_opt==0)
 	{
-	  fprintf(stderr,"%s could not stop comedi acquisition\n",prog_name);
-	  return 1;
+#ifdef DEBUG_4HZ
+	  fprintf(stderr,"stop acquisition thread\n");
+#endif
+	  if(comedi_interface_stop_acquisition(&comedi_inter)==-1)
+	    {
+           fprintf(stderr,"%s could not stop comedi acquisition\n",prog_name);
+	   return 1;
+	    }
 	}
-
        // free the memory used by fftw_inter    
       fftw_interface_4hz_free(&fftw_inter);
     }

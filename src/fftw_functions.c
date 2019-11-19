@@ -166,6 +166,71 @@ int fftw_interface_4hz_apply_filter(struct fftw_interface_4hz* fftw_int)
   return 0;  
 }
 
+double fftw_interface_4hz_power(struct fftw_interface_4hz* fftw_int)
+{
+  // return the signal root mean square
+  int i;
+  fftw_int->signal_sum_square=0;
+  fftw_int->signal_mean_square=0;
+  fftw_int->signal_root_mean_square=0;
+  
+  // the signal is at the beginning of the filtered_signal_array
+  for (i=fftw_int->real_data_to_fft_size-fftw_int->power_signal_length;i < fftw_int->real_data_to_fft_size;i++)
+    {
+      fftw_int->signal_sum_square+=(fftw_int->filtered_signal[i]*fftw_int->filtered_signal[i]);
+    }
+  fftw_int->signal_mean_square=fftw_int->signal_sum_square/fftw_int->real_data_to_fft_size;
+  fftw_int->signal_root_mean_square=sqrt(fftw_int->signal_mean_square);
+  return fftw_int->signal_root_mean_square;
+}
+
+double fftw_interface_4hz_get_phase(struct fftw_interface_4hz* fftw_int, struct timespec* elapsed_since_acquisition, double frequency)
+{
+  int i;
+  double diff;
+  double time_elapsed_acquisition_ms=((double)elapsed_since_acquisition->tv_nsec/1000000.0)+((double)elapsed_since_acquisition->tv_sec*1000);
+  double time_elapsed_since_transition_ms;
+  double total_elapsed_ms;
+  double phase;
+  double degrees_per_ms=360/(1000.0/8);
+  // after looking at the raw signal and filtered signal, it seems that the way to go is to detect the last neg to pos or pos to neg transition.
+  
+  i=fftw_int->real_data_to_fft_size-1;
+  if(fftw_int->filtered_signal[i]>=0)
+    {// detect the last negative to postive  transition, faster to start from end of signal
+      while (i>=0&&fftw_int->filtered_signal[i]>=0)
+	{
+	  i--;
+	}
+      // we got the index of negative to position, which represents phase 180
+      diff=fftw_int->real_data_to_fft_size-1-i;
+      time_elapsed_since_transition_ms=diff/fftw_int->sampling_rate*1000.0;
+      total_elapsed_ms=time_elapsed_since_transition_ms+time_elapsed_acquisition_ms;
+      phase=180+(total_elapsed_ms*degrees_per_ms);
+      //      fprintf(stderr,"diff: %lf time_elapsed_since_transition_ms: %lf time_elapsed_acquisition_ms: %lf, dpms: %lf, degrees added: %lf\n",diff,time_elapsed_since_transition_ms,time_elapsed_acquisition_ms,degrees_per_ms,degrees_per_ms*total_elapsed_ms);
+    }
+  else
+    { // detect the last positive to negative 
+      while (i>=0&&fftw_int->filtered_signal[i]<0)
+	{
+	  i--;
+	}
+      // we got the index of the positive to negative transition, which represents phase 0
+      diff=fftw_int->real_data_to_fft_size-1-i;
+	      
+      time_elapsed_since_transition_ms=diff/fftw_int->sampling_rate*1000.0;
+      total_elapsed_ms=time_elapsed_since_transition_ms+time_elapsed_acquisition_ms;
+      phase=total_elapsed_ms*degrees_per_ms;
+      //   fprintf(stderr,"diff: %lf time_elapsed_since_transition_ms: %lf time_elapsed_acquisition_ms: %lf, dpms: %lf, degrees added: %lf\n",diff,time_elapsed_since_transition_ms,time_elapsed_acquisition_ms,degrees_per_ms,degrees_per_ms*total_elapsed_ms);
+    }
+  while(phase>360)
+    {
+      phase-=360;
+    }
+  return phase;  
+} 
+
+
 
 int fftw_interface_theta_init(struct fftw_interface_theta* fftw_int)
 {
