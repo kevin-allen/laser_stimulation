@@ -334,7 +334,6 @@ struct time_keeper
 
   double trial_duration_sec;
   double pulse_duration_ms;
-
   double inter_pulse_duration_ms; // for the train stimulation
   struct timespec inter_pulse_duration; // for train stimulation
   double end_to_start_pulse_ms; // for the train stimulation

@@ -21,7 +21,7 @@ laser_stim_4hz is a simplified laser_stimulation program to specifically targets
 date 14.09.2019
 ************************************************************************/
 #include "main.h"
-//#define DEBUG_4HZ
+#define DEBUG_4HZ
 
 void print_options();
 int main(int argc, char *argv[])
@@ -58,14 +58,15 @@ int main(int argc, char *argv[])
 
   // variables to store values passed with options
   double stimulation_phase=90;
-  double pulse_length_ms=10;
-  double minimum_pulse_length_ms=10;
-  double maximum_pulse_length_ms=20;
+  double pulse_length_ms=200;
+  int minimum_pulse_length_ms=10;
+  int maximum_pulse_length_ms=20;
   double refractory_ms=5;
   double minimum_filter_freq=2;
   double maximum_filter_freq=6;
   double stimulation_phase_deviation=30;
-
+  double power_threshold=5;
+  
   // variables to do the fft
   int fft_length=16384;
   int fft_data_length_in_fft=10000;
@@ -92,7 +93,7 @@ int main(int argc, char *argv[])
 	  {"help", no_argument,0,'h'},
 	  {"version", no_argument,0,'v'},
 
-	  {"power",no_argument,0,'P'},
+	  {"power",required_argument,0,'P'},
 	  {"phase",required_argument,0,'H'},
 	  
 	  {"pulse_length",required_argument,0,'l'},
@@ -118,7 +119,7 @@ int main(int argc, char *argv[])
 	  {0, 0, 0, 0}
 	};
       int option_index = 0;
-      opt = getopt_long (argc, argv, "hvPH:l:m:M:r:f:F:q:w:X:y:z:o:c:x:d:a:",
+      opt = getopt_long (argc, argv, "hvP:H:l:m:M:r:f:F:q:w:X:y:z:o:c:x:d:a:",
 			 long_options, &option_index);
       
       /* Detect the end of the options. */
@@ -149,6 +150,7 @@ int main(int argc, char *argv[])
 	case  'P':
 	  {
 	    with_P_opt=1;
+	    power_threshold=atof(optarg);
 	    break;
 	  }
 	case 'H':
@@ -166,13 +168,13 @@ int main(int argc, char *argv[])
 	case  'm':
 	  {
 	    with_m_opt=1;
-	    minimum_pulse_length_ms=atof(optarg);
+	    minimum_pulse_length_ms=atoi(optarg);
 	    break;
 	  }	  
 	case  'M':
 	  {
 	    with_M_opt=1;
-    	    maximum_pulse_length_ms=atof(optarg);
+    	    maximum_pulse_length_ms=atoi(optarg);
 	    break;
 	  }
 	case  'r':
@@ -296,7 +298,7 @@ int main(int argc, char *argv[])
   
 
   // variables read from arguments
-  double laser_intensity_volt; // for laser power
+  double laser_intensity_volt=1; // for laser power
   double baseline_volt=0; // for ttl pulse
 
 
@@ -305,10 +307,12 @@ int main(int argc, char *argv[])
   lsampl_t comedi_baseline =0;
   lsampl_t comedi_pulse=0;
 
-  //double theta_degree_duration_ms=(1000/theta_frequency)/360;
-  double power_4hz;
-  double frequency_for_phase=(minimum_filter_freq+maximum_filter_freq)/2; // use mid point of band pass filter
 
+  double power_4hz;
+  double max_phase_diff=5;
+  double frequency_for_phase=(minimum_filter_freq+maximum_filter_freq)/2; // use mid point of band pass filter
+  double degree_duration_ms=(1000/frequency_for_phase)/360;
+  
   // structure with variables about the comedi device, see main.h for details
   struct comedi_interface comedi_inter;
 
@@ -336,7 +340,9 @@ int main(int argc, char *argv[])
 
 
   tk.duration_sleep_when_no_new_data=set_timespec_from_ms(SLEEP_WHEN_NO_NEW_DATA_MS);
-  //  tk.duration_pulse=set_timespec_from_ms(tk.pulse_duration_ms);
+  tk.pulse_duration_ms=pulse_length_ms;
+  tk.duration_pulse=set_timespec_from_ms(tk.pulse_duration_ms);
+
   
   // variables to work offline from a dat file
   int new_samples_per_read_operation=60; //  3 ms of data
@@ -430,9 +436,9 @@ int main(int argc, char *argv[])
       return 1;
     }
 
-  if (tk.trial_duration_sec<=0 || tk.trial_duration_sec > 10000)
+  if (tk.trial_duration_sec<1 || tk.trial_duration_sec > 10000)
     {
-      fprintf(stderr,"%s: trial duration should be between 0 and 10000 sec\nYou gave %lf\n",prog_name,tk.trial_duration_sec);
+      fprintf(stderr,"%s: trial duration should be between 1 and 10000 sec\nYou gave %lf\n",prog_name,tk.trial_duration_sec);
       return 1;
     }
 
@@ -676,7 +682,7 @@ int main(int argc, char *argv[])
 	      return 1;
 	    }
 	}
-      
+
       tk.duration_refractory_period=set_timespec_from_ms(refractory_ms);
       
       // start the acquisition thread, which will run in the background until comedi_inter.is_acquiring is set to 0
@@ -704,11 +710,21 @@ int main(int argc, char *argv[])
 #ifdef DEBUG_4HZ
       fprintf(stderr,"start trial loop\n");
 #endif
+
+
+      
+      
+      /*************************************************************
+       *************************************************************
+       Main loop processing the data
+       ************************************************************
+       ************************************************************/
+      
       while(tk.elapsed_beginning_trial.tv_sec < tk.trial_duration_sec) // loop until the trial is over
 	{
 
 #ifdef DEBUG_4HZ
-	  //	  fprintf(stderr,"time elapsed: %ld.%ld sec\n",tk.elapsed_beginning_trial.tv_sec,tk.elapsed_beginning_trial.tv_nsec);
+	    fprintf(stderr,"time elapsed: %ld.%09ld sec\n",tk.elapsed_beginning_trial.tv_sec,tk.elapsed_beginning_trial.tv_nsec);
 #endif
 	  
  
@@ -744,12 +760,12 @@ int main(int argc, char *argv[])
 	      tk.time_previous_new_data=tk.time_current_new_data;
 #endif
 	    }
-	  else // get data from a dat file
+	  else
 	    {
+	      /**************************************************
+              get data from a .dat file
+	      *************************************************/
 	      clock_gettime(CLOCK_REALTIME,&tk.time_last_acquired_data);
-	    /**************************************************
-              get data from file
-	    *************************************************/
 	      if(last_sample_no==0)
 		{
 		  // fill the buffer with the beginning of the file
@@ -770,12 +786,12 @@ int main(int argc, char *argv[])
 		    }
 		  last_sample_no= last_sample_no+new_samples_per_read_operation;
 		}
+
 	      // copy the short int array to double array
 	      for (i=0; i < fftw_inter.real_data_to_fft_size;i++)
 		{
 		  fftw_inter.signal_data[i]=data_from_file[i];
-		}
-	      
+		} 
 	    }
 
 	  /**************************************************
@@ -797,53 +813,49 @@ int main(int argc, char *argv[])
 	      clock_gettime(CLOCK_REALTIME, &tk.time_now);
 	      tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
 	      // get phase of filtered signal
-
 	      current_phase=fftw_interface_4hz_get_phase(&fftw_inter, &tk.elapsed_last_acquired_data,frequency_for_phase); 
 	      
 	      // phase difference between wanted and what it is now, from -180 to 180
 	      phase_diff=phase_difference(current_phase,stimulation_phase);
 	      
-	      fprintf(stderr,"iter: %ld, phase: %lf \n",trial_iteration,current_phase);	      
-	      for (i=0; i < fftw_inter.real_data_to_fft_size;i++)
-		{
-         	  printf("%ld %ld %lf %lf\n",trial_iteration,last_sample_no-fftw_inter.real_data_to_fft_size+i,fftw_inter.signal_data[i],fftw_inter.filtered_signal[i]);
-	        }
+
+	      // to check input data, filtered signal, power and phase with R script
+	      //	      fprintf(stderr,"iter: %ld, phase: %lf \n",trial_iteration,current_phase);	      
+	      //for (i=0; i < fftw_inter.real_data_to_fft_size;i++)
+	      //	  printf("%ld %ld %lf %lf %lf %lf\n",
+	      //	 trial_iteration,last_sample_no-fftw_inter.real_data_to_fft_size+i,fftw_inter.signal_data[i],fftw_inter.filtered_signal[i],current_phase,power_4hz);
 	      
-	      
+ 
 #ifdef DEBUG_4HZ
-	      printf("power at index %ld: %lf\n",last_sample_no,power_4hz);
+	      printf("Index %ld, power: %lf, phase: %f, phase_difference: %f, power_threshold: %f, refractory: %ld.%09ld\n",last_sample_no,power_4hz,current_phase,phase_diff,power_threshold,tk.duration_refractory_period.tv_sec ,tk.duration_refractory_period.tv_nsec );
 #endif
-	      /*
-	      if (theta_delta_ratio>THETA_DELTA_RATIO)
+	      if(with_H_opt==0) // we care only about power
 		{
-		  clock_gettime(CLOCK_REALTIME, &tk.time_now);
-		  tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
-		  // get the phase
-		  current_phase=fftw_interface_theta_get_phase(&fftw_inter, &tk.elapsed_last_acquired_data,theta_frequency); 
-		  // phase difference between wanted and what it is now, from -180 to 180
-		  phase_diff=phase_difference(current_phase,stimulation_theta_phase);
-#ifdef DEBUG_THETA
-		  fprintf(stderr,"stimulation_theta_phase: %lf current_phase: %lf phase_difference: %lf\n",stimulation_theta_phase,current_phase,phase_difference);
-#endif
-		  // if the absolute phase difference is smaller than the max_phase_difference
-		  if(sqrt(phase_diff*phase_diff)<max_phase_diff)
-		    { 
-		      // if we are just before the stimulation phase, we nanosleep to be bang on the correct phase
-		      if(phase_diff<0)
-			{
-			  tk.duration_sleep_to_right_phase=set_timespec_from_ms((0-phase_diff)*theta_degree_duration_ms);
-			  nanosleep(&tk.duration_sleep_to_right_phase,&tk.req);
-			}
+		  if(power_4hz>power_threshold)
+		    {
+		      clock_gettime(CLOCK_REALTIME, &tk.time_now);
+		      tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
+
+		      // check if refractory period is over
 		      clock_gettime(CLOCK_REALTIME,&tk.time_now);
 		      tk.elapsed_last_stimulation=diff(&tk.time_last_stimulation,&tk.time_now);
 		      
 		      // if the laser refractory period is over
-		      if(tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec || 
-			 tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec )
+		      if((tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec) ||
+			(tk.elapsed_last_stimulation.tv_sec==tk.duration_refractory_period.tv_sec &&
+			 tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec))
+
 			{
+			  if(with_m_opt)
+			    { // how long is the laser pulse
+			      int laser_on_ms =  (rand() %  (maximum_pulse_length_ms - minimum_pulse_length_ms + 1)) + minimum_pulse_length_ms;
+			      tk.pulse_duration_ms=(double)laser_on_ms;
+			      tk.duration_pulse=set_timespec_from_ms(tk.pulse_duration_ms);
+			    }
+
 			  // stimulation time!!
 			  clock_gettime(CLOCK_REALTIME,&tk.time_last_stimulation); 
-						  
+			  
 			  // start the pulse
 			  comedi_data_write(comedi_inter.dev[device_index_for_stimulation].comedi_dev,
 					    comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output,
@@ -861,20 +873,93 @@ int main(int argc, char *argv[])
 					    0,
 					    comedi_inter.dev[device_index_for_stimulation].aref,
 					    comedi_baseline);
-#ifdef DEBUG_THETA
-			  fprintf(stderr,"interval from last stimulation: %ld (us)\n",tk.elapsed_last_stimulation.tv_nsec/1000);
+#ifdef DEBUG_4HZ
+			  fprintf(stderr,"******Stimulation******* duration: %ld.%09ld sec ******\n",tk.duration_pulse.tv_sec,tk.duration_pulse.tv_nsec);
 #endif
+			  // get the time of last stimulation
+			  clock_gettime(CLOCK_REALTIME, &tk.time_last_stimulation);
+
+			}
+		      else{
+#ifdef DEBUG_4HZ
+			fprintf(stderr,"time within refractory period: %ld.%09ld sec\n",tk.elapsed_last_stimulation.tv_sec,tk.elapsed_last_stimulation.tv_nsec);
+#endif			   
+
+		      }
+		    }
+		}
+	      else //(with_H_opt==1)
+		{ // we care about power and phase
+		  if(power_4hz>power_threshold && sqrt(phase_diff*phase_diff) < max_phase_diff)
+		    {
+		      clock_gettime(CLOCK_REALTIME, &tk.time_now);
+		      tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
+		      
+		      // if we are just before the stimulation phase, we nanosleep to be bang on the correct phase
+		      if(phase_diff<0)
+			{
+			  tk.duration_sleep_to_right_phase=set_timespec_from_ms((0-phase_diff)*degree_duration_ms);
+			  nanosleep(&tk.duration_sleep_to_right_phase,&tk.req);
+			}
+		      clock_gettime(CLOCK_REALTIME,&tk.time_now);
+		      tk.elapsed_last_stimulation=diff(&tk.time_last_stimulation,&tk.time_now);
+			  
+		      // if the laser refractory period is over
+		      if((tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec) ||
+			(tk.elapsed_last_stimulation.tv_sec==tk.duration_refractory_period.tv_sec &&
+			 tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec))
+			{
+
+			  if(with_m_opt)
+			    { // how long is the laser pulse
+			      int laser_on_ms =  (rand() %  (maximum_pulse_length_ms - minimum_pulse_length_ms + 1)) + minimum_pulse_length_ms;
+			      tk.pulse_duration_ms=(double)laser_on_ms;
+			      tk.duration_pulse=set_timespec_from_ms(tk.pulse_duration_ms);
+			    }
+			  
+			  // stimulation time!!
+			  clock_gettime(CLOCK_REALTIME,&tk.time_last_stimulation); 
+			  
+			  // start the pulse
+			  comedi_data_write(comedi_inter.dev[device_index_for_stimulation].comedi_dev,
+					    comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output,
+					    CHANNEL_FOR_PULSE,
+					    0,
+					    comedi_inter.dev[device_index_for_stimulation].aref,
+					    comedi_pulse);
+			  // wait
+			 
+			  nanosleep(&tk.duration_pulse,&tk.req);
+			  
+			  // end of the pulse
+			  comedi_data_write(comedi_inter.dev[device_index_for_stimulation].comedi_dev,
+					    comedi_inter.dev[device_index_for_stimulation].subdevice_analog_output,
+					    CHANNEL_FOR_PULSE,
+					    0,
+					    comedi_inter.dev[device_index_for_stimulation].aref,
+					    comedi_baseline);
+#ifdef DEBUG_4HZ
+			  fprintf(stderr,"******Stimulation, phase: %f, duration: %ld.%09ld sec ******\n",stimulation_phase,tk.duration_pulse.tv_sec,tk.duration_pulse.tv_nsec);
+#endif
+			  // get the time of last stimulation
+			  clock_gettime(CLOCK_REALTIME, &tk.time_last_stimulation);
+
+			}
+		      else
+			{
+#ifdef DEBUG_4HZ
+			  fprintf(stderr,"time within refractory period: %ld.%09ld sec\n",tk.elapsed_last_stimulation.tv_sec,tk.elapsed_last_stimulation.tv_nsec);
+#endif			   
+
 			}
 		    }
 		}
-	  
+	      
+	      
 	      clock_gettime(CLOCK_REALTIME, &tk.time_now);
 	      tk.elapsed_last_acquired_data=diff(&tk.time_last_acquired_data,&tk.time_now);
 	      
-	      // will stop the trial
-	      //	      tk.elapsed_beginning_trial.tv_sec = tk.trial_duration_sec;
-	      */
-	      }
+	    }
 	  
 	  clock_gettime(CLOCK_REALTIME, &tk.time_now);
 	  tk.elapsed_beginning_trial=diff(&tk.time_beginning_trial,&tk.time_now);
@@ -955,7 +1040,7 @@ void print_options()
 
 
   
-  printf("--offline <dat_file_name> or -o\t\t\t: use a .dat file as input data. You also need option -c, together with either -s or -t, to work with -o\n");
+  printf("--offline <dat_file_name> or -o\t\t\t: use a .dat file as input data. You also need to set option -c.\n");
   printf("--channels_in_dat_file <number> or -c\t\t: give the number of channels in the dat file. Use only when working offline from a dat file (-o or --offline)\n");
   printf("--offline_channel <number> or -x\t\t: give the channel on which detection is done when working offline from a dat file (-o)\n");
 
@@ -963,5 +1048,3 @@ void print_options()
   printf("--ttl_amplitude_volt <V> or -a\t\t\t: give the amplitude of the ttl pulse in volt\n");
   return;
 }
-
-

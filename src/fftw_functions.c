@@ -192,7 +192,8 @@ double fftw_interface_4hz_get_phase(struct fftw_interface_4hz* fftw_int, struct 
   double time_elapsed_since_transition_ms;
   double total_elapsed_ms;
   double phase;
-  double degrees_per_ms=360/(1000.0/8);
+  double degrees_per_ms=360/(1000.0/4); // this only works for 4 Hz!!!!
+  
   // after looking at the raw signal and filtered signal, it seems that the way to go is to detect the last neg to pos or pos to neg transition.
   
   i=fftw_int->real_data_to_fft_size-1;
