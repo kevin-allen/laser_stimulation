@@ -1035,8 +1035,10 @@ int main(int argc, char *argv[])
 	      if((swr_power>swr_power_threshold && swr_convolution_peak > swr_convolution_peak_threshold) && // if power is large enough and refractory over
 		 ((tk.elapsed_last_stimulation.tv_sec>tk.duration_refractory_period.tv_sec) ||
 			(tk.elapsed_last_stimulation.tv_sec=tk.duration_refractory_period.tv_sec &&
-			 tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec))
+			 tk.elapsed_last_stimulation.tv_nsec>tk.duration_refractory_period.tv_nsec)))
+		{
 #ifdef DEBUG_SWR
+		  /*
 		  printf("%ld\n",last_sample_no);
 		  for(i=0;i < fftw_inter_swr.real_data_to_fft_size;i++)
 		    {
@@ -1044,7 +1046,9 @@ int main(int argc, char *argv[])
 		    }
 		  fprintf(stderr,"check no: %ld, last_sample_no: %ld  sleep time: %.2lf (us), processing time: %.2lf, diff_between_two_get_data: %.2lf power: %.2lf threshold: %.2lf convolution_peak: %.2lf\n",counter++,last_sample_no, tk.duration_sleep_between_swr_processing.tv_nsec/1000.0, tk.elapsed_from_acquisition.tv_nsec/1000.0,tk.duration_previous_current_new_data.tv_nsec/1000.0,swr_power,swr_power_threshold,swr_convolution_peak);  		  
 		  return 1;
+		  */
 #endif
+		 
 		  // stimulation time!!
 		  if(with_o_opt==0) // not working with a data file
 		    {
@@ -1078,6 +1082,7 @@ int main(int argc, char *argv[])
 		      // get the time of last stimulation
 		      clock_gettime(CLOCK_REALTIME, &tk.time_last_stimulation);
 		    }
+		
 		  if(with_o_opt==1) // working with data file
 		    {
 		      //printf("%ld %lf %lf %lf %ld\n",last_sample_no,swr_power,fftw_inter_swr.mean_power,fftw_inter_swr.std_power,fftw_inter_swr.number_segments_analysed);
@@ -1114,7 +1119,7 @@ int main(int argc, char *argv[])
     }
   
   
-  if (with_o_opt==0)
+  if(with_o_opt==0)
     {
       // free the memory used by comedi_inter
       comedi_interface_free(&comedi_inter);
